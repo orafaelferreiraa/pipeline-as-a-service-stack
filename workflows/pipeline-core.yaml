@@ -1,0 +1,342 @@
+name: Pipeline Core Validation
+
+# Reusable workflow for Terraform validation across all projects
+# Includes: TFLint, tfsec, Checkov, Terraform fmt/validate, Terraform Docs
+# Ready for future additions: tf-cost, driftctl, sentinel, etc.
+
+on:
+  workflow_call:
+    inputs:
+      terraform_dir:
+        description: 'Terraform working directory'
+        required: false
+        type: string
+        default: 'terraform'
+      terraform_version:
+        description: 'Terraform version (e.g., 1.9.0, ~1.9.0)'
+        required: false
+        type: string
+        default: '~1.9.0'
+      generate_tfdocs:
+        description: 'Generate Terraform documentation'
+        required: false
+        type: boolean
+        default: true
+      enable_tfsec:
+        description: 'Enable tfsec scanning'
+        required: false
+        type: boolean
+        default: true
+      enable_checkov:
+        description: 'Enable Checkov scanning'
+        required: false
+        type: boolean
+        default: true
+      enable_tflint:
+        description: 'Enable TFLint linting'
+        required: false
+        type: boolean
+        default: true
+      enable_tf_cost:
+        description: 'Enable Terraform Cost Estimation (future)'
+        required: false
+        type: boolean
+        default: false
+      soft_fail:
+        description: 'Continue on validation errors (soft fail)'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  terraform-format:
+    name: Terraform Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Format Check
+        id: fmt
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          echo "::group::Checking Terraform Format"
+          terraform fmt -check -recursive
+          echo "::endgroup::"
+        continue-on-error: ${{ inputs.soft_fail }}
+
+      - name: Format Check Summary
+        if: always()
+        run: |
+          if [ "${{ steps.fmt.outcome }}" == "failure" ]; then
+            echo "❌ Terraform format check failed"
+            echo "Fix with: terraform fmt -recursive ${{ inputs.terraform_dir }}"
+          else
+            echo "✅ Terraform format check passed"
+          fi
+
+  terraform-validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || 'null' }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || 'null' }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || 'null' }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || 'null' }}
+      ARM_USE_AZUREAD: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ inputs.terraform_dir }}/.terraform
+            ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/.terraform.lock.hcl', inputs.terraform_dir)) }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - name: Terraform Init (validation only)
+        id: init
+        working-directory: ${{ inputs.terraform_dir }}
+        run: terraform init -input=false -backend=false
+        continue-on-error: ${{ inputs.soft_fail }}
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ inputs.terraform_dir }}
+        run: terraform validate
+        continue-on-error: ${{ inputs.soft_fail }}
+
+      - name: Validation Summary
+        if: always()
+        run: |
+          if [ "${{ steps.validate.outcome }}" == "failure" ]; then
+            echo "❌ Terraform validation failed"
+          else
+            echo "✅ Terraform validation passed"
+          fi
+
+  tflint-scan:
+    name: TFLint Linting
+    runs-on: ubuntu-latest
+    if: inputs.enable_tflint == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Cache TFLint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          key: ${{ runner.os }}-tflint-${{ hashFiles(format('{0}/.tflint.hcl', inputs.terraform_dir)) }}
+          restore-keys: |
+            ${{ runner.os }}-tflint-
+
+      - name: TFLint Init and Scan
+        id: tflint
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          tflint --init
+          tflint -f compact
+        continue-on-error: ${{ inputs.soft_fail }}
+
+      - name: TFLint Summary
+        if: always()
+        run: |
+          if [ "${{ steps.tflint.outcome }}" == "failure" ]; then
+            echo "⚠️ TFLint found issues"
+          else
+            echo "✅ TFLint scan passed"
+          fi
+
+  tfsec-scan:
+    name: tfsec Security Scan
+    runs-on: ubuntu-latest
+    if: inputs.enable_tfsec == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: tfsec Scan
+        id: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ${{ inputs.terraform_dir }}
+          soft_fail: ${{ inputs.soft_fail }}
+          format: sarif
+          output_file: tfsec-results.sarif
+
+      - name: Upload tfsec SARIF Report
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: tfsec-results.sarif
+          category: tfsec
+
+      - name: tfsec Summary
+        if: always()
+        run: |
+          if [ "${{ steps.tfsec.outcome }}" == "failure" ]; then
+            echo "🔒 tfsec found security issues"
+          else
+            echo "✅ tfsec scan passed"
+          fi
+
+  checkov-scan:
+    name: Checkov Policy Scan
+    runs-on: ubuntu-latest
+    if: inputs.enable_checkov == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkov Scan
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ inputs.terraform_dir }}
+          quiet: false
+          soft_fail: ${{ inputs.soft_fail }}
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov SARIF Report
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+      - name: Checkov Summary
+        if: always()
+        run: |
+          if [ "${{ steps.checkov.outcome }}" == "failure" ]; then
+            echo "📋 Checkov found policy violations"
+          else
+            echo "✅ Checkov scan passed"
+          fi
+
+  terraform-docs:
+    name: Generate Terraform Documentation
+    runs-on: ubuntu-latest
+    if: inputs.generate_tfdocs == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Render Terraform Docs
+        uses: terraform-docs/gh-actions@v1.3.0
+        with:
+          working-dir: ${{ inputs.terraform_dir }}
+          output-file: README.md
+          output-method: inject
+          git-push: false
+
+      - name: Check Documentation Changes
+        id: docs_check
+        run: |
+          if git diff --quiet; then
+            echo "docs_changed=false" >> $GITHUB_OUTPUT
+            echo "✅ Documentation is up to date"
+          else
+            echo "docs_changed=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Documentation changes detected"
+            git diff --name-only
+          fi
+
+      - name: Comment PR with Documentation Status
+        if: github.event_name == 'pull_request' && steps.docs_check.outputs.docs_changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ Terraform documentation is out of date. Please run:\n```bash\nterraform-docs -c . ${{ inputs.terraform_dir }}\n```'
+            })
+
+  tf-cost-estimation:
+    name: Terraform Cost Estimation
+    runs-on: ubuntu-latest
+    if: inputs.enable_tf_cost == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Init (for cost estimation)
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          terraform init -input=false -backend=false
+
+      - name: Placeholder - tf-cost
+        run: |
+          echo "ℹ️ tf-cost integration coming soon"
+          echo "Tools to consider: infracost, cloud.tf, terraform-cost-cli"
+
+  validation-summary:
+    name: Validation Summary
+    runs-on: ubuntu-latest
+    needs: [terraform-format, terraform-validate, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 📊 Pipeline Core Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ needs.terraform-format.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Validate | ${{ needs.terraform-validate.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| TFLint | ${{ needs.tflint-scan.result == 'success' && '✅' || needs.tflint-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| tfsec | ${{ needs.tfsec-scan.result == 'success' && '✅' || needs.tfsec-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ needs.checkov-scan.result == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docs | ${{ needs.terraform-docs.result == 'success' && '✅' || needs.terraform-docs.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Directory**: \`${{ inputs.terraform_dir }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terraform Version**: \`${{ inputs.terraform_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Soft Fail**: \`${{ inputs.soft_fail }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check Overall Status
+        if: failure()
+        run: exit 1
