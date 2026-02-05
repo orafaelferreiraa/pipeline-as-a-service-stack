@@ -103,6 +103,7 @@ jobs:
 
   terraform-validate:
     name: Terraform Validate
+    needs: terraform-format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -147,6 +148,7 @@ jobs:
 
   tflint-scan:
     name: TFLint Linting
+    needs: terraform-validate
     runs-on: ubuntu-latest
     if: inputs.enable_tflint == true
     steps:
@@ -186,8 +188,9 @@ jobs:
 
   tfsec-scan:
     name: tfsec Security Scan
+    needs: [terraform-validate, tflint-scan]
     runs-on: ubuntu-latest
-    if: inputs.enable_tfsec == true
+    if: inputs.enable_tfsec == true && always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -199,13 +202,12 @@ jobs:
           working_directory: ${{ inputs.terraform_dir }}
           soft_fail: ${{ inputs.soft_fail }}
           format: sarif
-          output_file: tfsec-results.sarif
 
       - name: Upload tfsec SARIF Report
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: tfsec-results.sarif
+          sarif_file: results.sarif
           category: tfsec
 
       - name: tfsec Summary
@@ -219,8 +221,9 @@ jobs:
 
   checkov-scan:
     name: Checkov Policy Scan
+    needs: [terraform-validate, tflint-scan, tfsec-scan]
     runs-on: ubuntu-latest
-    if: inputs.enable_checkov == true
+    if: inputs.enable_checkov == true && always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -233,13 +236,13 @@ jobs:
           quiet: false
           soft_fail: ${{ inputs.soft_fail }}
           output_format: sarif
-          output_file_path: checkov-results.sarif
+          output_file_path: results.sarif
 
       - name: Upload Checkov SARIF Report
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: checkov-results.sarif
+          sarif_file: results.sarif
           category: checkov
 
       - name: Checkov Summary
@@ -253,8 +256,9 @@ jobs:
 
   terraform-docs:
     name: Generate Terraform Documentation
+    needs: [terraform-validate, tflint-scan, tfsec-scan, checkov-scan]
     runs-on: ubuntu-latest
-    if: inputs.generate_tfdocs == true
+    if: inputs.generate_tfdocs == true && always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
