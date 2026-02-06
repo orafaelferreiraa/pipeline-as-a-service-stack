@@ -204,8 +204,8 @@ jobs:
           format: sarif
 
       - name: Upload tfsec SARIF Report
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('results.sarif') != ''
         with:
           sarif_file: results.sarif
           category: tfsec
@@ -239,8 +239,8 @@ jobs:
           output_file_path: results.sarif
 
       - name: Upload Checkov SARIF Report
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('results.sarif') != ''
         with:
           sarif_file: results.sarif
           category: checkov
