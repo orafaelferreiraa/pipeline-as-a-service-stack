@@ -42,11 +42,6 @@ on:
         required: false
         type: boolean
         default: false
-      enable_cache:
-        description: 'Enable caching for Terraform/TFLint'
-        required: false
-        type: boolean
-        default: true
       soft_fail:
         description: 'Continue on validation errors (soft fail)'
         required: false
@@ -72,7 +67,6 @@ jobs:
           terraform_version: ${{ inputs.terraform_version }}
 
       - name: Cache Terraform providers
-        if: inputs.enable_cache == true
         uses: actions/cache@v4
         with:
           path: |
@@ -112,7 +106,6 @@ jobs:
           tflint_version: latest
 
       - name: Cache TFLint plugins
-        if: inputs.enable_cache == true
         uses: actions/cache@v4
         with:
           path: ~/.tflint.d/plugins
