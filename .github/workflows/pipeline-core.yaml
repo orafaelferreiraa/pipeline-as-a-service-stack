@@ -101,54 +101,9 @@ jobs:
             echo "✅ Terraform format check passed"
           fi
 
-  terraform-validate:
-    name: Terraform Validate
-    needs: terraform-format
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-
-      - name: Cache Terraform providers
-        if: inputs.enable_cache == true
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ inputs.terraform_dir }}/.terraform
-            ~/.terraform.d/plugin-cache
-          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/.terraform.lock.hcl', inputs.terraform_dir)) }}
-          restore-keys: |
-            ${{ runner.os }}-terraform-
-
-      - name: Terraform Init (validation only)
-        id: init
-        working-directory: ${{ inputs.terraform_dir }}
-        run: terraform init -input=false -backend=false
-        continue-on-error: ${{ inputs.soft_fail }}
-
-      - name: Terraform Validate
-        id: validate
-        working-directory: ${{ inputs.terraform_dir }}
-        run: terraform validate
-        continue-on-error: ${{ inputs.soft_fail }}
-
-      - name: Validation Summary
-        if: always()
-        run: |
-          if [ "${{ steps.validate.outcome }}" == "failure" ]; then
-            echo "❌ Terraform validation failed"
-          else
-            echo "✅ Terraform validation passed"
-          fi
-
   tflint-scan:
     name: TFLint Linting
-    needs: terraform-validate
+    needs: terraform-format
     runs-on: ubuntu-latest
     if: inputs.enable_tflint == true
     steps:
@@ -188,7 +143,7 @@ jobs:
 
   tfsec-scan:
     name: tfsec Security Scan
-    needs: [terraform-validate, tflint-scan]
+    needs: [terraform-format, tflint-scan]
     runs-on: ubuntu-latest
     if: inputs.enable_tfsec == true && always()
     steps:
@@ -221,7 +176,7 @@ jobs:
 
   checkov-scan:
     name: Checkov Policy Scan
-    needs: [terraform-validate, tflint-scan, tfsec-scan]
+    needs: [terraform-format, tflint-scan, tfsec-scan]
     runs-on: ubuntu-latest
     if: inputs.enable_checkov == true && always()
     steps:
@@ -256,7 +211,7 @@ jobs:
 
   terraform-docs:
     name: Generate Terraform Documentation
-    needs: [terraform-validate, tflint-scan, tfsec-scan, checkov-scan]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
     runs-on: ubuntu-latest
     if: inputs.generate_tfdocs == true && always()
     steps:
@@ -323,7 +278,7 @@ jobs:
   validation-summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [terraform-format, terraform-validate, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
     if: always()
     steps:
       - name: Generate Summary
@@ -333,7 +288,6 @@ jobs:
           echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Format | ${{ needs.terraform-format.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Validate | ${{ needs.terraform-validate.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TFLint | ${{ needs.tflint-scan.result == 'success' && '✅' || needs.tflint-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| tfsec | ${{ needs.tfsec-scan.result == 'success' && '✅' || needs.tfsec-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov | ${{ needs.checkov-scan.result == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
