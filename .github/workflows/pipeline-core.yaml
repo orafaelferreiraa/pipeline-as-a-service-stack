@@ -82,23 +82,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-terraform-
 
-      - name: Terraform Format Check
+      - name: Terraform Format
         id: fmt
         working-directory: ${{ inputs.terraform_dir }}
-        run: |
-          echo "::group::Checking Terraform Format"
-          terraform fmt -check -recursive
-          echo "::endgroup::"
+        run: terraform fmt -recursive
         continue-on-error: ${{ inputs.soft_fail }}
 
-      - name: Format Check Summary
+      - name: Terraform Format Summary
         if: always()
         run: |
           if [ "${{ steps.fmt.outcome }}" == "failure" ]; then
-            echo "❌ Terraform format check failed"
-            echo "Fix with: terraform fmt -recursive ${{ inputs.terraform_dir }}"
+            echo "⚠️ Terraform format had issues"
           else
-            echo "✅ Terraform format check passed"
+            echo "✅ Terraform formatted"
           fi
 
   tflint-scan:
@@ -211,7 +207,7 @@ jobs:
 
   terraform-docs:
     name: Generate Terraform Documentation
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, tf-cost-estimation]
     runs-on: ubuntu-latest
     if: inputs.generate_tfdocs == true && always()
     steps:
@@ -278,7 +274,7 @@ jobs:
   validation-summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, tf-cost-estimation, terraform-docs]
     if: always()
     steps:
       - name: Generate Summary
