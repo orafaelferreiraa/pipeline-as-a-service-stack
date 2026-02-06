@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   terraform-format:
-    name: Terraform Format Check
+    name: Terraform Format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -198,6 +198,29 @@ jobs:
             echo "✅ Checkov scan passed"
           fi
 
+  tf-cost-estimation:
+    runs-on: ubuntu-latest
+    if: inputs.enable_tf_cost == true
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Init (for cost estimation)
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          terraform init -input=false -backend=false
+
+      - name: Placeholder - tf-cost
+        run: |
+          echo "ℹ️ tf-cost integration coming soon"
+          echo "Tools to consider: infracost, cloud.tf, terraform-cost-cli"
+
   terraform-docs:
     name: Generate Terraform Documentation
     needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, tf-cost-estimation]
@@ -240,29 +263,6 @@ jobs:
               repo: context.repo.repo,
               body: '⚠️ Terraform documentation is out of date. Please run:\n```bash\nterraform-docs -c . ${{ inputs.terraform_dir }}\n```'
             })
-
-  tf-cost-estimation:
-    name: Terraform Cost Estimation
-    runs-on: ubuntu-latest
-    if: inputs.enable_tf_cost == true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-
-      - name: Terraform Init (for cost estimation)
-        working-directory: ${{ inputs.terraform_dir }}
-        run: |
-          terraform init -input=false -backend=false
-
-      - name: Placeholder - tf-cost
-        run: |
-          echo "ℹ️ tf-cost integration coming soon"
-          echo "Tools to consider: infracost, cloud.tf, terraform-cost-cli"
 
   validation-summary:
     name: Validation Summary
