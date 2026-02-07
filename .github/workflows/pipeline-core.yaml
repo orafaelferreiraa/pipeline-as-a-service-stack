@@ -57,6 +57,8 @@ jobs:
   terraform-format:
     name: Terraform Format
     runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.fmt.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -80,7 +82,7 @@ jobs:
         id: fmt
         working-directory: ${{ inputs.terraform_dir }}
         run: terraform fmt -recursive
-        continue-on-error: ${{ inputs.soft_fail }}
+        continue-on-error: true
 
       - name: Terraform Format Summary
         if: always()
@@ -96,6 +98,8 @@ jobs:
     needs: terraform-format
     runs-on: ubuntu-latest
     if: inputs.enable_tflint == true
+    outputs:
+      outcome: ${{ steps.tflint.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -119,7 +123,7 @@ jobs:
         run: |
           tflint --init
           tflint -f compact
-        continue-on-error: ${{ inputs.soft_fail }}
+        continue-on-error: true
 
       - name: TFLint Summary
         if: always()
@@ -135,6 +139,8 @@ jobs:
     needs: [terraform-format, tflint-scan]
     runs-on: ubuntu-latest
     if: inputs.enable_tfsec == true && always()
+    outputs:
+      outcome: ${{ steps.tfsec.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -144,8 +150,8 @@ jobs:
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
           working_directory: ${{ inputs.terraform_dir }}
-          soft_fail: ${{ inputs.soft_fail }}
           format: sarif
+        continue-on-error: true
 
       - name: Upload tfsec SARIF Report
         uses: github/codeql-action/upload-sarif@v4
@@ -168,6 +174,8 @@ jobs:
     needs: [terraform-format, tflint-scan, tfsec-scan]
     runs-on: ubuntu-latest
     if: inputs.enable_checkov == true && always()
+    outputs:
+      outcome: ${{ steps.checkov.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -185,14 +193,8 @@ jobs:
         working-directory: ${{ inputs.terraform_dir }}
         run: |
           checkov -d . --output sarif --output-file-path ../results.sarif --output cli 2>&1 | tee checkov-output.txt
-          CHECKOV_EXIT=$?
-          echo "checkov_exit=$CHECKOV_EXIT" >> $GITHUB_OUTPUT
-          if [ "${{ inputs.soft_fail }}" == "true" ]; then
-            exit 0
-          else
-            exit $CHECKOV_EXIT
-          fi
-        continue-on-error: ${{ inputs.soft_fail }}
+          exit $?
+        continue-on-error: true
 
       - name: Upload Checkov SARIF Report
         uses: github/codeql-action/upload-sarif@v4
@@ -288,10 +290,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Format | ${{ needs.terraform-format.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| TFLint | ${{ needs.tflint-scan.result == 'success' && '✅' || needs.tflint-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| tfsec | ${{ needs.tfsec-scan.result == 'success' && '✅' || needs.tfsec-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Checkov | ${{ needs.checkov-scan.result == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ needs.terraform-format.outputs.outcome == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| TFLint | ${{ needs.tflint-scan.outputs.outcome == 'success' && '✅' || needs.tflint-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| tfsec | ${{ needs.tfsec-scan.outputs.outcome == 'success' && '✅' || needs.tfsec-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ needs.checkov-scan.outputs.outcome == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docs | ${{ needs.terraform-docs.result == 'success' && '✅' || needs.terraform-docs.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Configuration" >> $GITHUB_STEP_SUMMARY
@@ -300,17 +302,46 @@ jobs:
           echo "- **Soft Fail**: \`${{ inputs.soft_fail }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Check Overall Status
-        if: |
-          needs.terraform-format.result == 'failure' ||
-          needs.tflint-scan.result == 'failure' ||
-          needs.tfsec-scan.result == 'failure' ||
-          needs.checkov-scan.result == 'failure' ||
-          needs.terraform-docs.result == 'failure'
         run: |
-          echo "❌ One or more validation checks failed!"
-          echo "Format: ${{ needs.terraform-format.result }}"
-          echo "TFLint: ${{ needs.tflint-scan.result }}"
-          echo "tfsec: ${{ needs.tfsec-scan.result }}"
-          echo "Checkov: ${{ needs.checkov-scan.result }}"
+          FAILED=false
+
+          echo "### Scan Outcomes"
+          echo "Format: ${{ needs.terraform-format.outputs.outcome || 'skipped' }}"
+          echo "TFLint: ${{ needs.tflint-scan.outputs.outcome || 'skipped' }}"
+          echo "tfsec: ${{ needs.tfsec-scan.outputs.outcome || 'skipped' }}"
+          echo "Checkov: ${{ needs.checkov-scan.outputs.outcome || 'skipped' }}"
           echo "Docs: ${{ needs.terraform-docs.result }}"
-          exit 1
+          echo ""
+
+          if [ "${{ needs.terraform-format.outputs.outcome }}" == "failure" ]; then
+            echo "❌ Terraform Format: FAILED"
+            FAILED=true
+          fi
+          if [ "${{ needs.tflint-scan.outputs.outcome }}" == "failure" ]; then
+            echo "❌ TFLint: FAILED"
+            FAILED=true
+          fi
+          if [ "${{ needs.tfsec-scan.outputs.outcome }}" == "failure" ]; then
+            echo "❌ tfsec: FAILED"
+            FAILED=true
+          fi
+          if [ "${{ needs.checkov-scan.outputs.outcome }}" == "failure" ]; then
+            echo "❌ Checkov: FAILED"
+            FAILED=true
+          fi
+          if [ "${{ needs.terraform-docs.result }}" == "failure" ]; then
+            echo "❌ Terraform Docs: FAILED"
+            FAILED=true
+          fi
+
+          if [ "$FAILED" == "true" ]; then
+            echo ""
+            echo "❌ One or more validation checks failed!"
+            if [ "${{ inputs.soft_fail }}" == "true" ]; then
+              echo "⚠️ soft_fail=true — reporting as warning only, pipeline continues"
+            else
+              exit 1
+            fi
+          else
+            echo "✅ All validation checks passed!"
+          fi
