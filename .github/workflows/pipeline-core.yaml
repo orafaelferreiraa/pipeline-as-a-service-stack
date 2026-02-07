@@ -192,8 +192,8 @@ jobs:
         id: checkov
         working-directory: ${{ inputs.terraform_dir }}
         run: |
+          set -o pipefail
           checkov -d . --output sarif --output-file-path ../results.sarif --output cli 2>&1 | tee checkov-output.txt
-          exit $?
         continue-on-error: true
 
       - name: Upload Checkov SARIF Report
