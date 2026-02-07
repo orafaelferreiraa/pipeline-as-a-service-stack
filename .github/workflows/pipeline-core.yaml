@@ -172,21 +172,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Checkov
+        run: pip install checkov
+
       - name: Checkov Scan
         id: checkov
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: ${{ inputs.terraform_dir }}
-          quiet: false
-          soft_fail: ${{ inputs.soft_fail }}
-          output_format: sarif
-          output_file_path: results.sarif
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          checkov -d . --output sarif --output-file-path ../results.sarif --output cli 2>&1 | tee checkov-output.txt
+          CHECKOV_EXIT=$?
+          echo "checkov_exit=$CHECKOV_EXIT" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.soft_fail }}" == "true" ]; then
+            exit 0
+          else
+            exit $CHECKOV_EXIT
+          fi
+        continue-on-error: ${{ inputs.soft_fail }}
 
       - name: Upload Checkov SARIF Report
         uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('results.sarif') != ''
+        if: always()
         with:
-          sarif_file: results.sarif
+          sarif_file: results.sarif/results_sarif.sarif
           category: checkov
 
       - name: Checkov Summary
@@ -288,5 +300,17 @@ jobs:
           echo "- **Soft Fail**: \`${{ inputs.soft_fail }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Check Overall Status
-        if: failure()
-        run: exit 1
+        if: |
+          needs.terraform-format.result == 'failure' ||
+          needs.tflint-scan.result == 'failure' ||
+          needs.tfsec-scan.result == 'failure' ||
+          needs.checkov-scan.result == 'failure' ||
+          needs.terraform-docs.result == 'failure'
+        run: |
+          echo "❌ One or more validation checks failed!"
+          echo "Format: ${{ needs.terraform-format.result }}"
+          echo "TFLint: ${{ needs.tflint-scan.result }}"
+          echo "tfsec: ${{ needs.tfsec-scan.result }}"
+          echo "Checkov: ${{ needs.checkov-scan.result }}"
+          echo "Docs: ${{ needs.terraform-docs.result }}"
+          exit 1
