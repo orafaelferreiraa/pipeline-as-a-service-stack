@@ -1,6 +1,6 @@
 # Pipeline as a Service Stack
 
-Reusable GitHub Actions workflow that centralizes Terraform validation across all infrastructure projects.
+Reusable GitHub Actions workflow (`workflow_call`) that centralizes Terraform validation across all infrastructure projects. Consumers invoke a single workflow reference — all stages, caching, SARIF reports, and summary reporting are handled internally.
 
 > **Version 1.0.0** | Production Ready
 
@@ -14,9 +14,9 @@ Reusable GitHub Actions workflow that centralizes Terraform validation across al
 | 2 | **TFLint** | `enable_tflint` | Linting & best practices |
 | 3 | **tfsec** | `enable_tfsec` | Security scanning (SARIF to GitHub Security tab) |
 | 4 | **Checkov** | `enable_checkov` | Policy compliance (SARIF to GitHub Security tab) |
-| 5 | **tf-cost** | `enable_tf_cost` | Cost estimation (placeholder for future implementation) |
-| 6 | **terraform-docs** | `generate_tfdocs` | Documentation generation with PR comment on drift |
-| 7 | **Validation Summary** | Always | Consolidated status report in GitHub Step Summary |
+| 5 | **tf-cost** | `enable_tf_cost` | Cost estimation (infracost / cloud.tf — placeholder) |
+| 6 | **terraform-docs** | `generate_tfdocs` | Documentation generation with drift detection + PR comment |
+| 7 | **Validation Summary** | Always | Consolidated status table in GitHub Step Summary |
 
 ---
 
@@ -26,7 +26,7 @@ Reusable GitHub Actions workflow that centralizes Terraform validation across al
 ```yaml
 jobs:
   validate:
-    uses: your-org/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     with:
       terraform_dir: terraform
       terraform_version: '~1.9.0'
@@ -36,7 +36,7 @@ jobs:
 ```yaml
 jobs:
   validate:
-    uses: your-org/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     secrets: inherit
     permissions:
       contents: read
@@ -89,28 +89,64 @@ permissions:
 │    fmt       │    │  (optional)  │    │  (optional)  │    │  (optional)  │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
                                                                     │
-                    ┌──────────────┐    ┌──────────────┐            │
-                    │  Validation  │◄───│ terraform    │◄───────────┘
-                    │   Summary    │    │    docs      │
-                    └──────────────┘    └──────────────┘
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐            │
+│  Validation  │◄───│ terraform    │◄───│   tf-cost    │◄───────────┘
+│   Summary    │    │    docs      │    │  (optional)  │
+└──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-Each stage uses `continue-on-error: true` and reports status to the final **Validation Summary**, which consolidates all results into a GitHub Step Summary table.
+Stages run **sequentially** with `continue-on-error: true` and `if: always()` gates — every stage executes regardless of prior failures. The final **Validation Summary** consolidates all outcomes into a GitHub Step Summary table.
+
+### Validation Summary Output
+
+The summary step generates a table in GitHub Step Summary:
+
+| Check | Result |
+|-------|--------|
+| Format | ✅ |
+| TFLint | ✅ |
+| tfsec | ✅ |
+| Checkov | ⊘ (skipped) |
+| Docs | ✅ |
+
+- **✅** — passed
+- **❌** — failed
+- **⊘** — skipped (feature flag disabled)
+
+### Soft Fail Behavior
+
+When `soft_fail: true`, the pipeline reports failures as **warnings** but exits with code 0 — the calling workflow continues. When `soft_fail: false` (default), any failure causes the summary step to `exit 1`, blocking the caller.
 
 ### Caching
 
-- Terraform providers cached via `.terraform.lock.hcl` hash
-- TFLint plugins cached via `.tflint.hcl` hash
+| Cache | Key | Path |
+|-------|-----|------|
+| Terraform providers | `.terraform.lock.hcl` hash | `$terraform_dir/.terraform`, `~/.terraform.d/plugin-cache` |
+| TFLint plugins | `.tflint.hcl` hash | `~/.tflint.d/plugins` |
 
 ### SARIF Reports
 
-Both **tfsec** and **Checkov** upload SARIF reports to GitHub Security tab, enabling:
+Both **tfsec** and **Checkov** upload SARIF reports to GitHub Security tab:
+
+| Tool | SARIF Category | Action |
+|------|---------------|--------|
+| tfsec | `tfsec` | `github/codeql-action/upload-sarif@v4` |
+| Checkov | `checkov` | `github/codeql-action/upload-sarif@v4` |
+
+Enables:
 - Security findings in the repository Security tab
 - Code scanning alerts with line-level annotations
 
+### Terraform Docs — Drift Detection
+
+When `generate_tfdocs: true`, the stage:
+1. Renders documentation via `terraform-docs/gh-actions@v1.3.0` (inject mode into `README.md`)
+2. Checks `git diff` for changes
+3. If drift detected on a PR, posts a comment with instructions to regenerate locally
+
 ---
 
-## Usage Example
+## Usage Examples
 
 ### Multi-Environment Validation
 ```yaml
@@ -122,25 +158,68 @@ on:
 
 jobs:
   validate-dev:
-    uses: your-org/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     secrets: inherit
     with:
       terraform_dir: dev
       soft_fail: true
 
   validate-staging:
-    uses: your-org/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     secrets: inherit
     with:
       terraform_dir: staging
       soft_fail: true
 
   validate-prod:
-    uses: your-org/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     secrets: inherit
     with:
       terraform_dir: prod
-      soft_fail: false
+      soft_fail: false  # Block merge on failure
+```
+
+### Platform as a Service Stack Integration
+```yaml
+name: Validate Platform Stack
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['terraform/**']
+
+jobs:
+  validate:
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      terraform_dir: terraform
+      terraform_version: '~1.9.0'
+      enable_tflint: true
+      enable_tfsec: true
+      enable_checkov: true
+      generate_tfdocs: true
+```
+
+### Security-Only Scan
+```yaml
+jobs:
+  security:
+    uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
+    secrets: inherit
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      terraform_dir: terraform
+      enable_tflint: false
+      enable_tfsec: true
+      enable_checkov: true
+      generate_tfdocs: false
 ```
 
 ---
@@ -151,21 +230,46 @@ jobs:
 pipeline-as-a-service-stack/
 ├── .github/
 │   └── workflows/
-│       └── pipeline-core.yaml    # Reusable validation workflow
+│       └── pipeline-core.yaml    # Reusable validation workflow (workflow_call)
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
+## Toolchain & Versions
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Terraform | `~1.9.0` (configurable) | `fmt`, provider caching |
+| TFLint | `latest` | Linting & best practices |
+| tfsec | `v1.0.3` (action) | Security scanning → SARIF |
+| Checkov | latest (pip) | Policy compliance → SARIF |
+| terraform-docs | `v1.3.0` (action) | Documentation drift detection |
+| Python | `3.12` | Checkov runtime |
+| GitHub Actions | `actions/checkout@v4`, `actions/cache@v4`, `actions/upload-artifact@v4` | Core actions |
+
+---
+
 ## Benefits
 
-- Eliminates 70+ lines of duplicate validation code per project
-- Centralized maintenance (one file to update for all consumers)
-- Consistent validation across all infrastructure projects
-- SARIF security reports integrated with GitHub Security tab
-- Configurable per-project via feature flags
-- Future-proof (ready for tf-cost, driftctl, sentinel, etc.)
+- **Eliminates 70+ lines** of duplicate validation code per project
+- **Centralized maintenance** — one file to update for all consumers
+- **Consistent validation** across all infrastructure projects
+- **SARIF security reports** integrated with GitHub Security tab
+- **Feature-flag driven** — enable/disable stages per project
+- **Soft fail mode** — non-blocking validation for development environments
+- **Drift detection** — terraform-docs checks and alerts on PR when docs are out of date
+- **Future-proof** — ready for tf-cost (infracost, cloud.tf), driftctl, sentinel, etc.
+
+---
+
+## Related Stacks
+
+| Stack | Description |
+|-------|-------------|
+| [platform-as-a-service-stack](../platform-as-a-service-stack/) | Azure infrastructure platform (Terraform) |
+| [tfmodules-as-a-service-stack](../tfmodules-as-a-service-stack/) | Reusable Terraform modules |
 
 ---
 
@@ -175,5 +279,5 @@ pipeline-as-a-service-stack/
 
 ---
 
-**Version**: 1.0.0
+**Version**: 1.0.0  
 **Last Updated**: February 2026
