@@ -37,11 +37,11 @@ on:
         required: false
         type: boolean
         default: true
-      enable_tf_cost:
-        description: 'Enable Terraform Cost Estimation (future)'
-        required: false
-        type: boolean
-        default: false
+      # enable_tf_cost:
+      #   description: 'Enable Terraform Cost Estimation (future)'
+      #   required: false
+      #   type: boolean
+      #   default: false
       soft_fail:
         description: 'Continue on validation errors (soft fail)'
         required: false
@@ -68,30 +68,11 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform_version }}
 
-      - name: Cache Terraform providers
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ inputs.terraform_dir }}/.terraform
-            ~/.terraform.d/plugin-cache
-          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/.terraform.lock.hcl', inputs.terraform_dir)) }}
-          restore-keys: |
-            ${{ runner.os }}-terraform-
-
       - name: Terraform Format
         id: fmt
         working-directory: ${{ inputs.terraform_dir }}
         run: terraform fmt -recursive
         continue-on-error: true
-
-      - name: Terraform Format Summary
-        if: always()
-        run: |
-          if [ "${{ steps.fmt.outcome }}" == "failure" ]; then
-            echo "⚠️ Terraform format had issues"
-          else
-            echo "✅ Terraform formatted"
-          fi
 
   tflint-scan:
     name: TFLint Linting
@@ -125,15 +106,6 @@ jobs:
           tflint -f compact
         continue-on-error: true
 
-      - name: TFLint Summary
-        if: always()
-        run: |
-          if [ "${{ steps.tflint.outcome }}" == "failure" ]; then
-            echo "⚠️ TFLint found issues"
-          else
-            echo "✅ TFLint scan passed"
-          fi
-
   tfsec-scan:
     name: tfsec Security Scan
     needs: [terraform-format, tflint-scan]
@@ -159,15 +131,6 @@ jobs:
         with:
           sarif_file: results.sarif
           category: tfsec
-
-      - name: tfsec Summary
-        if: always()
-        run: |
-          if [ "${{ steps.tfsec.outcome }}" == "failure" ]; then
-            echo "🔒 tfsec found security issues"
-          else
-            echo "✅ tfsec scan passed"
-          fi
 
   checkov-scan:
     name: Checkov Policy Scan
@@ -203,41 +166,32 @@ jobs:
           sarif_file: results.sarif/results_sarif.sarif
           category: checkov
 
-      - name: Checkov Summary
-        if: always()
-        run: |
-          if [ "${{ steps.checkov.outcome }}" == "failure" ]; then
-            echo "📋 Checkov found policy violations"
-          else
-            echo "✅ Checkov scan passed"
-          fi
-
-  tf-cost-estimation:
-    runs-on: ubuntu-latest
-    if: inputs.enable_tf_cost == true
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-
-      - name: Terraform Init (for cost estimation)
-        working-directory: ${{ inputs.terraform_dir }}
-        run: |
-          terraform init -input=false -backend=false
-
-      - name: Placeholder - tf-cost
-        run: |
-          echo "ℹ️ tf-cost integration coming soon"
-          echo "Tools to consider: infracost, cloud.tf, terraform-cost-cli"
+  # tf-cost-estimation:
+  #   runs-on: ubuntu-latest
+  #   if: inputs.enable_tf_cost == true
+  #   needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Setup Terraform
+  #       uses: hashicorp/setup-terraform@v3
+  #       with:
+  #         terraform_version: ${{ inputs.terraform_version }}
+  #
+  #     - name: Terraform Init (for cost estimation)
+  #       working-directory: ${{ inputs.terraform_dir }}
+  #       run: |
+  #         terraform init -input=false -backend=false
+  #
+  #     - name: Placeholder - tf-cost
+  #       run: |
+  #         echo "ℹ️ tf-cost integration coming soon"
+  #         echo "Tools to consider: infracost, cloud.tf, terraform-cost-cli"
 
   terraform-docs:
     name: Generate Terraform Documentation
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, tf-cost-estimation]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
     runs-on: ubuntu-latest
     if: inputs.generate_tfdocs == true && always()
     steps:
@@ -281,7 +235,7 @@ jobs:
   validation-summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, tf-cost-estimation, terraform-docs]
+    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
     if: always()
     steps:
       - name: Generate Summary
