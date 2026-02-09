@@ -14,9 +14,9 @@ Reusable GitHub Actions workflow (`workflow_call`) that centralizes Terraform va
 | 2 | **TFLint** | `enable_tflint` | Linting & best practices |
 | 3 | **tfsec** | `enable_tfsec` | Security scanning (SARIF to GitHub Security tab) |
 | 4 | **Checkov** | `enable_checkov` | Policy compliance (SARIF to GitHub Security tab) |
-| 5 | **tf-cost** | `enable_tf_cost` | Cost estimation (infracost / cloud.tf — placeholder) |
-| 6 | **terraform-docs** | `generate_tfdocs` | Documentation generation with drift detection + PR comment |
-| 7 | **Validation Summary** | Always | Consolidated status table in GitHub Step Summary |
+| 5 | **terraform-docs** | `generate_tfdocs` | Documentation generation with drift detection + PR comment |
+| 6 | **Validation Summary** | Always | Consolidated status table in GitHub Step Summary |
+| — | **tf-cost** | _coming soon_ | Cost estimation (infracost / cloud.tf — not yet implemented) |
 
 ---
 
@@ -49,7 +49,6 @@ jobs:
       enable_tfsec: true
       enable_checkov: true
       generate_tfdocs: true
-      enable_tf_cost: false
       soft_fail: false
 ```
 
@@ -64,7 +63,6 @@ jobs:
 | `enable_tflint` | boolean | `true` | Run TFLint linting |
 | `enable_tfsec` | boolean | `true` | Run tfsec security scan |
 | `enable_checkov` | boolean | `true` | Run Checkov policy scan |
-| `enable_tf_cost` | boolean | `false` | Cost estimation (coming soon) |
 | `generate_tfdocs` | boolean | `true` | Generate terraform-docs and check drift |
 | `soft_fail` | boolean | `false` | Continue pipeline on validation errors |
 
@@ -89,10 +87,10 @@ permissions:
 │    fmt       │    │  (optional)  │    │  (optional)  │    │  (optional)  │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
                                                                     │
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐            │
-│  Validation  │◄───│ terraform    │◄───│   tf-cost    │◄───────────┘
-│   Summary    │    │    docs      │    │  (optional)  │
-└──────────────┘    └──────────────┘    └──────────────┘
+                    ┌──────────────┐    ┌──────────────┐            │
+                    │  Validation  │◄───│ terraform    │◄───────────┘
+                    │   Summary    │    │    docs      │
+                    └──────────────┘    └──────────────┘
 ```
 
 Stages run **sequentially** with `continue-on-error: true` and `if: always()` gates — every stage executes regardless of prior failures. The final **Validation Summary** consolidates all outcomes into a GitHub Step Summary table.
@@ -113,6 +111,8 @@ The summary step generates a table in GitHub Step Summary:
 - **❌** — failed
 - **⊘** — skipped (feature flag disabled)
 
+The summary also includes a **Configuration** section showing the Terraform directory, version, and soft_fail setting used in the run.
+
 ### Soft Fail Behavior
 
 When `soft_fail: true`, the pipeline reports failures as **warnings** but exits with code 0 — the calling workflow continues. When `soft_fail: false` (default), any failure causes the summary step to `exit 1`, blocking the caller.
@@ -121,8 +121,7 @@ When `soft_fail: true`, the pipeline reports failures as **warnings** but exits 
 
 | Cache | Key | Path |
 |-------|-----|------|
-| Terraform providers | `.terraform.lock.hcl` hash | `$terraform_dir/.terraform`, `~/.terraform.d/plugin-cache` |
-| TFLint plugins | `.tflint.hcl` hash | `~/.tflint.d/plugins` |
+| TFLint plugins | `${{ runner.os }}-tflint-${{ hashFiles('.tflint.hcl') }}` | `~/.tflint.d/plugins` |
 
 ### SARIF Reports
 
@@ -241,13 +240,15 @@ pipeline-as-a-service-stack/
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | `~1.9.0` (configurable) | `fmt`, provider caching |
+| Terraform | `~1.9.0` (configurable) | `fmt` |
 | TFLint | `latest` | Linting & best practices |
 | tfsec | `v1.0.3` (action) | Security scanning → SARIF |
 | Checkov | latest (pip) | Policy compliance → SARIF |
 | terraform-docs | `v1.3.0` (action) | Documentation drift detection |
 | Python | `3.12` | Checkov runtime |
-| GitHub Actions | `actions/checkout@v4`, `actions/cache@v4`, `actions/upload-artifact@v4` | Core actions |
+| GitHub Actions | `actions/checkout@v4`, `actions/cache@v4` | Core actions |
+| Setup Actions | `hashicorp/setup-terraform@v3`, `terraform-linters/setup-tflint@v4`, `actions/setup-python@v5` | Tool setup |
+| Utilities | `github/codeql-action/upload-sarif@v4`, `actions/github-script@v7` | SARIF upload, PR comments |
 
 ---
 
