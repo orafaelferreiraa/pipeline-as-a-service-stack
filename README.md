@@ -2,8 +2,6 @@
 
 Reusable GitHub Actions workflow (`workflow_call`) that centralizes Terraform validation across all infrastructure projects. Consumers invoke a single workflow reference — all stages, caching, SARIF reports, and summary reporting are handled internally.
 
-> **Version 1.0.0** | Production Ready
-
 ---
 
 ## What's Included
@@ -94,6 +92,94 @@ permissions:
 ```
 
 Stages run **sequentially** with `continue-on-error: true` and `if: always()` gates — every stage executes regardless of prior failures. The final **Validation Summary** consolidates all outcomes into a GitHub Step Summary table.
+
+---
+
+## 🏗️ Pipeline Architecture
+
+### Execution Flow
+
+```mermaid
+flowchart TD
+    A["📤 PR Opened / Manual Trigger"] --> B["🚀 workflow_call invoked"]
+    B --> C["<b>Stage 1: terraform fmt</b><br/>Code formatting"]
+    C --> D{"✅ Pass?"}
+    D -->|Yes| E["<b>Stage 2: TFLint</b><br/>Linting & best practices<br/><i>feature_flag: enable_tflint</i>"]
+    D -->|No| Z["❌ Summary: Format Failed"]
+    E --> F{"✅ Pass?"}
+    F -->|Yes| G["<b>Stage 3: tfsec</b><br/>Security scanning<br/><i>feature_flag: enable_tfsec</i>"]
+    F -->|Skip| G
+    G --> H{"✅ Pass?"}
+    H -->|Yes| I["<b>Stage 4: Checkov</b><br/>Policy compliance<br/><i>feature_flag: enable_checkov</i>"]
+    H -->|Skip| I
+    I --> J{"✅ Pass?"}
+    J -->|Yes| K["<b>Stage 5: terraform-docs</b><br/>Drift detection<br/><i>feature_flag: generate_tfdocs</i>"]
+    J -->|Skip| K
+    K --> L{"docs<br/>changed?"}
+    L -->|Yes| M["💬 Post PR Comment<br/>w/ regenerate instructions"]
+    L -->|No| N["✅ Validation Summary"]
+    M --> N
+    Z --> O{"soft_fail<br/>enabled?"}
+    O -->|No| P["🛑 Pipeline Blocked"]
+    O -->|Yes| Q["⚠️ Warning Only"]
+    N --> R["✅ PR Ready to Merge"]
+    P --> S["🚫 Merge Blocked"]
+    Q --> R
+    
+    style A fill:#0d1117,stroke:#388bfd,color:#fff,stroke-width:2px
+    style B fill:#0d1117,stroke:#388bfd,color:#fff,stroke-width:2px
+    style C fill:#1f6feb,stroke:#388bfd,color:#fff
+    style E fill:#1f6feb,stroke:#388bfd,color:#fff
+    style G fill:#da3633,stroke:#f85149,color:#fff
+    style I fill:#1f6feb,stroke:#388bfd,color:#fff
+    style K fill:#238636,stroke:#3fb950,color:#fff
+    style N fill:#238636,stroke:#3fb950,color:#fff,stroke-width:2px
+    style R fill:#238636,stroke:#3fb950,color:#fff,stroke-width:2px
+    style Z fill:#da3633,stroke:#f85149,color:#fff
+    style P fill:#da3633,stroke:#f85149,color:#fff
+    style S fill:#da3633,stroke:#f85149,color:#fff
+    style M fill:#1f6feb,stroke:#388bfd,color:#fff
+```
+
+### Multi-Project Integration
+
+```mermaid
+graph TB
+    subgraph "🏗️ Pipeline as a Service Stack"
+        direction TB
+        A["pipeline-core.yaml<br/><b>workflow_call</b><br/>Reusable Workflow"]
+        A --> B["Input Parameters<br/>terraform_dir<br/>terraform_version<br/>feature flags"]
+        B --> C["Validation Stages<br/>fmt → lint → sec → policy → docs"]
+        C --> D["Output<br/>SARIF Reports<br/>Step Summary<br/>PR Comments"]
+    end
+    
+    subgraph "📦 Consumer Projects"
+        E["platform-as-a-service-stack<br/>.github/workflows/deploy-plan.yml"]
+        F["tfmodules-as-a-service-stack<br/>.github/workflows/validate.yml"]
+        G["Other Infrastructure Repos<br/>.github/workflows/check.yml"]
+    end
+    
+    E -->|uses| A
+    F -->|uses| A
+    G -->|uses| A
+    
+    A -.->|SARIF Upload| H["🔒 GitHub Security Tab"]
+    A -.->|Workflow Summary| I["📊 Check Results"]
+    A -.->|PR Comments| J["💬 Drift Notifications"]
+    
+    style A fill:#0d1117,stroke:#388bfd,color:#fff,stroke-width:3px
+    style B fill:#1f6feb,stroke:#388bfd,color:#fff
+    style C fill:#1f6feb,stroke:#388bfd,color:#fff
+    style D fill:#238636,stroke:#3fb950,color:#fff
+    style E fill:#161b22,stroke:#30363d,color:#fff
+    style F fill:#161b22,stroke:#30363d,color:#fff
+    style G fill:#161b22,stroke:#30363d,color:#fff
+    style H fill:#da3633,stroke:#f85149,color:#fff
+    style I fill:#1f6feb,stroke:#388bfd,color:#fff
+    style J fill:#1f6feb,stroke:#388bfd,color:#fff
+```
+
+---
 
 ### Validation Summary Output
 
@@ -273,12 +359,3 @@ pipeline-as-a-service-stack/
 | [tfmodules-as-a-service-stack](../tfmodules-as-a-service-stack/) | Reusable Terraform modules |
 
 ---
-
-## Support
-
-**Issues?** Create an issue in this repository.
-
----
-
-**Version**: 1.0.0  
-**Last Updated**: February 2026
