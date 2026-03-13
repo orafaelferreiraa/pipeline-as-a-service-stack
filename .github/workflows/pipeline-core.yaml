@@ -1,7 +1,7 @@
 name: Pipeline Core Validation
 
 # Reusable workflow for Terraform validation across all projects
-# Includes: TFLint, tfsec, Checkov, Terraform fmt/validate, Terraform Docs
+# Includes: TFLint, Trivy, Checkov, Terraform fmt, Terraform Docs
 # Ready for future additions: tf-cost, driftctl, sentinel, etc.
 
 on:
@@ -22,8 +22,8 @@ on:
         required: false
         type: boolean
         default: true
-      enable_tfsec:
-        description: 'Enable tfsec scanning'
+      enable_trivy:
+        description: 'Enable Trivy security scanning'
         required: false
         type: boolean
         default: true
@@ -103,7 +103,7 @@ jobs:
         working-directory: ${{ inputs.terraform_dir }}
         run: |
           tflint --init
-          tflint -f compact 2>&1 | tee tflint-results.txt
+          tflint --recursive -f compact 2>&1 | tee tflint-results.txt
         continue-on-error: true
 
       - name: Upload TFLint Results
@@ -114,53 +114,57 @@ jobs:
           path: ${{ inputs.terraform_dir }}/tflint-results.txt
           retention-days: 30
 
-  tfsec-scan:
-    name: tfsec Security Scan
+  trivy-scan:
+    name: Trivy Security Scan
     needs: [terraform-format, tflint-scan]
     runs-on: ubuntu-latest
-    if: inputs.enable_tfsec == true && always()
+    if: inputs.enable_trivy == true && always()
     outputs:
-      outcome: ${{ steps.tfsec.outcome }}
+      outcome: ${{ steps.trivy.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup tfsec
-        run: |
-          curl -sL https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64 -o /usr/local/bin/tfsec
-          chmod +x /usr/local/bin/tfsec
-
-      - name: tfsec Scan
-        id: tfsec
-        working-directory: ${{ inputs.terraform_dir }}
-        run: |
-          tfsec . 2>&1 | tee tfsec-results.txt
+      - name: Trivy Scan
+        id: trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: ${{ inputs.terraform_dir }}
+          format: table
+          output: trivy-results.txt
+          exit-code: 1
         continue-on-error: true
 
-      - name: tfsec SARIF Report
+      - name: Trivy SARIF Report
+        uses: aquasecurity/trivy-action@0.28.0
         if: always()
-        working-directory: ${{ inputs.terraform_dir }}
-        run: tfsec . --format sarif > tfsec-results.sarif 2>/dev/null || true
+        with:
+          scan-type: config
+          scan-ref: ${{ inputs.terraform_dir }}
+          format: sarif
+          output: trivy-results.sarif
+        continue-on-error: true
 
-      - name: Upload tfsec SARIF Report
+      - name: Upload Trivy SARIF Report
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: ${{ inputs.terraform_dir }}/tfsec-results.sarif
-          category: tfsec
+          sarif_file: trivy-results.sarif
+          category: trivy
         continue-on-error: true
 
-      - name: Upload tfsec Results
+      - name: Upload Trivy Results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tfsec-results
-          path: ${{ inputs.terraform_dir }}/tfsec-results.txt
+          name: trivy-results
+          path: trivy-results.txt
           retention-days: 30
 
   checkov-scan:
     name: Checkov Policy Scan
-    needs: [terraform-format, tflint-scan, tfsec-scan]
+    needs: [terraform-format, tflint-scan, trivy-scan]
     runs-on: ubuntu-latest
     if: inputs.enable_checkov == true && always()
     outputs:
@@ -203,7 +207,7 @@ jobs:
   # tf-cost-estimation:
   #   runs-on: ubuntu-latest
   #   if: inputs.enable_tf_cost == true
-  #   needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
+  #   needs: [terraform-format, tflint-scan, trivy-scan, checkov-scan]
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -225,7 +229,7 @@ jobs:
 
   terraform-docs:
     name: Generate Terraform Documentation
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan]
+    needs: [terraform-format, tflint-scan, trivy-scan, checkov-scan]
     runs-on: ubuntu-latest
     if: inputs.generate_tfdocs == true && always()
     steps:
@@ -269,7 +273,7 @@ jobs:
   validation-summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
+    needs: [terraform-format, tflint-scan, trivy-scan, checkov-scan, terraform-docs]
     if: always()
     steps:
       - name: Download Scanner Logs
@@ -287,14 +291,14 @@ jobs:
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Format | ${{ needs.terraform-format.outputs.outcome == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TFLint | ${{ needs.tflint-scan.outputs.outcome == 'success' && '✅' || needs.tflint-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| tfsec | ${{ needs.tfsec-scan.outputs.outcome == 'success' && '✅' || needs.tfsec-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy-scan.outputs.outcome == 'success' && '✅' || needs.trivy-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov | ${{ needs.checkov-scan.outputs.outcome == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docs | ${{ needs.terraform-docs.result == 'success' && '✅' || needs.terraform-docs.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### 📋 Scanner Logs" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          for scanner in tflint tfsec checkov; do
+          for scanner in tflint trivy checkov; do
             FILE="${scanner}-results.txt"
             if [ -f "$FILE" ]; then
               LINES=$(wc -l < "$FILE")
@@ -330,7 +334,7 @@ jobs:
           echo "### Scan Outcomes"
           echo "Format: ${{ needs.terraform-format.outputs.outcome || 'skipped' }}"
           echo "TFLint: ${{ needs.tflint-scan.outputs.outcome || 'skipped' }}"
-          echo "tfsec: ${{ needs.tfsec-scan.outputs.outcome || 'skipped' }}"
+          echo "Trivy: ${{ needs.trivy-scan.outputs.outcome || 'skipped' }}"
           echo "Checkov: ${{ needs.checkov-scan.outputs.outcome || 'skipped' }}"
           echo "Docs: ${{ needs.terraform-docs.result }}"
           echo ""
@@ -343,8 +347,8 @@ jobs:
             echo "❌ TFLint: FAILED"
             FAILED=true
           fi
-          if [ "${{ needs.tfsec-scan.outputs.outcome }}" == "failure" ]; then
-            echo "❌ tfsec: FAILED"
+          if [ "${{ needs.trivy-scan.outputs.outcome }}" == "failure" ]; then
+            echo "❌ Trivy: FAILED"
             FAILED=true
           fi
           if [ "${{ needs.checkov-scan.outputs.outcome }}" == "failure" ]; then
