@@ -103,8 +103,16 @@ jobs:
         working-directory: ${{ inputs.terraform_dir }}
         run: |
           tflint --init
-          tflint -f compact
+          tflint -f compact 2>&1 | tee tflint-results.txt
         continue-on-error: true
+
+      - name: Upload TFLint Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tflint-results
+          path: ${{ inputs.terraform_dir }}/tflint-results.txt
+          retention-days: 30
 
   tfsec-scan:
     name: tfsec Security Scan
@@ -117,20 +125,38 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup tfsec
+        run: |
+          curl -sL https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64 -o /usr/local/bin/tfsec
+          chmod +x /usr/local/bin/tfsec
+
       - name: tfsec Scan
         id: tfsec
-        uses: aquasecurity/tfsec-action@v1.0.3
-        with:
-          working_directory: ${{ inputs.terraform_dir }}
-          format: sarif
+        working-directory: ${{ inputs.terraform_dir }}
+        run: |
+          tfsec . 2>&1 | tee tfsec-results.txt
         continue-on-error: true
+
+      - name: tfsec SARIF Report
+        if: always()
+        working-directory: ${{ inputs.terraform_dir }}
+        run: tfsec . --format sarif > tfsec-results.sarif 2>/dev/null || true
 
       - name: Upload tfsec SARIF Report
         uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('results.sarif') != ''
+        if: always()
         with:
-          sarif_file: results.sarif
+          sarif_file: ${{ inputs.terraform_dir }}/tfsec-results.sarif
           category: tfsec
+        continue-on-error: true
+
+      - name: Upload tfsec Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tfsec-results
+          path: ${{ inputs.terraform_dir }}/tfsec-results.txt
+          retention-days: 30
 
   checkov-scan:
     name: Checkov Policy Scan
@@ -156,7 +182,7 @@ jobs:
         working-directory: ${{ inputs.terraform_dir }}
         run: |
           set -o pipefail
-          checkov -d . --output sarif --output-file-path ../results.sarif --output cli 2>&1 | tee checkov-output.txt
+          checkov -d . --output sarif --output-file-path ../results.sarif --output cli 2>&1 | tee checkov-results.txt
         continue-on-error: true
 
       - name: Upload Checkov SARIF Report
@@ -165,6 +191,14 @@ jobs:
         with:
           sarif_file: results.sarif/results_sarif.sarif
           category: checkov
+
+      - name: Upload Checkov Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkov-results
+          path: ${{ inputs.terraform_dir }}/checkov-results.txt
+          retention-days: 30
 
   # tf-cost-estimation:
   #   runs-on: ubuntu-latest
@@ -238,6 +272,13 @@ jobs:
     needs: [terraform-format, tflint-scan, tfsec-scan, checkov-scan, terraform-docs]
     if: always()
     steps:
+      - name: Download Scanner Logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-results'
+          merge-multiple: true
+        continue-on-error: true
+
       - name: Generate Summary
         run: |
           echo "## 📊 Pipeline Core Validation Summary" >> $GITHUB_STEP_SUMMARY
@@ -250,6 +291,33 @@ jobs:
           echo "| Checkov | ${{ needs.checkov-scan.outputs.outcome == 'success' && '✅' || needs.checkov-scan.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docs | ${{ needs.terraform-docs.result == 'success' && '✅' || needs.terraform-docs.result == 'skipped' && '⊘' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📋 Scanner Logs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for scanner in tflint tfsec checkov; do
+            FILE="${scanner}-results.txt"
+            if [ -f "$FILE" ]; then
+              LINES=$(wc -l < "$FILE")
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>📄 ${scanner} — ${LINES} lines</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              head -500 "$FILE" >> $GITHUB_STEP_SUMMARY
+              if [ "$LINES" -gt 500 ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "... (truncated — download full artifact for complete output)" >> $GITHUB_STEP_SUMMARY
+              fi
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>📄 ${scanner} — skipped or no output</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
           echo "### Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **Directory**: \`${{ inputs.terraform_dir }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Terraform Version**: \`${{ inputs.terraform_version }}\`" >> $GITHUB_STEP_SUMMARY
