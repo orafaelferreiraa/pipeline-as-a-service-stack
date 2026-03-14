@@ -9,8 +9,8 @@ Reusable GitHub Actions workflow (`workflow_call`) that centralizes Terraform va
 | Stage | Tool | Feature Flag | Description |
 |-------|------|-------------|-------------|
 | 1 | **terraform fmt** | Always | Code formatting (recursive) |
-| 2 | **TFLint** | `enable_tflint` | Linting & best practices |
-| 3 | **tfsec** | `enable_tfsec` | Security scanning (SARIF to GitHub Security tab) |
+| 2 | **TFLint** | `enable_tflint` | Linting & best practices (recursive) |
+| 3 | **Trivy** | `enable_trivy` | Security scanning (SARIF to GitHub Security tab) |
 | 4 | **Checkov** | `enable_checkov` | Policy compliance (SARIF to GitHub Security tab) |
 | 5 | **terraform-docs** | `generate_tfdocs` | Documentation generation with drift detection + PR comment |
 | 6 | **Validation Summary** | Always | Consolidated status table in GitHub Step Summary |
@@ -27,7 +27,7 @@ jobs:
     uses: orafaelferreiraa/pipeline-as-a-service-stack/.github/workflows/pipeline-core.yaml@main
     with:
       terraform_dir: terraform
-      terraform_version: '~1.9.0'
+      terraform_version: '~1.14.0'
 ```
 
 ### Full Features
@@ -42,9 +42,9 @@ jobs:
       security-events: write
     with:
       terraform_dir: terraform
-      terraform_version: '~1.9.0'
+      terraform_version: '~1.14.0'
       enable_tflint: true
-      enable_tfsec: true
+      enable_trivy: true
       enable_checkov: true
       generate_tfdocs: true
       soft_fail: false
@@ -57,9 +57,9 @@ jobs:
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
 | `terraform_dir` | string | `terraform` | Terraform working directory |
-| `terraform_version` | string | `~1.9.0` | Terraform version |
-| `enable_tflint` | boolean | `true` | Run TFLint linting |
-| `enable_tfsec` | boolean | `true` | Run tfsec security scan |
+| `terraform_version` | string | `~1.14.0` | Terraform version |
+| `enable_tflint` | boolean | `true` | Run TFLint linting (recursive) |
+| `enable_trivy` | boolean | `true` | Run Trivy security scan |
 | `enable_checkov` | boolean | `true` | Run Checkov policy scan |
 | `generate_tfdocs` | boolean | `true` | Generate terraform-docs and check drift |
 | `soft_fail` | boolean | `false` | Continue pipeline on validation errors |
@@ -81,7 +81,7 @@ permissions:
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ terraform    │───►│   TFLint     │───►│    tfsec     │───►│   Checkov    │
+│ terraform    │───►│   TFLint     │───►│    Trivy     │───►│   Checkov    │
 │    fmt       │    │  (optional)  │    │  (optional)  │    │  (optional)  │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
                                                                     │
@@ -107,7 +107,7 @@ flowchart TD
     D -->|Yes| E["<b>Stage 2: TFLint</b><br/>Linting & best practices<br/><i>feature_flag: enable_tflint</i>"]
     D -->|No| Z["❌ Summary: Format Failed"]
     E --> F{"✅ Pass?"}
-    F -->|Yes| G["<b>Stage 3: tfsec</b><br/>Security scanning<br/><i>feature_flag: enable_tfsec</i>"]
+    F -->|Yes| G["<b>Stage 3: Trivy</b><br/>Security scanning<br/><i>feature_flag: enable_trivy</i>"]
     F -->|Skip| G
     G --> H{"✅ Pass?"}
     H -->|Yes| I["<b>Stage 4: Checkov</b><br/>Policy compliance<br/><i>feature_flag: enable_checkov</i>"]
@@ -189,7 +189,7 @@ The summary step generates a table in GitHub Step Summary:
 |-------|--------|
 | Format | ✅ |
 | TFLint | ✅ |
-| tfsec | ✅ |
+| Trivy | ✅ |
 | Checkov | ⊘ (skipped) |
 | Docs | ✅ |
 
@@ -211,11 +211,11 @@ When `soft_fail: true`, the pipeline reports failures as **warnings** but exits 
 
 ### SARIF Reports
 
-Both **tfsec** and **Checkov** upload SARIF reports to GitHub Security tab:
+Both **Trivy** and **Checkov** upload SARIF reports to GitHub Security tab:
 
 | Tool | SARIF Category | Action |
 |------|---------------|--------|
-| tfsec | `tfsec` | `github/codeql-action/upload-sarif@v4` |
+| Trivy | `trivy` | `github/codeql-action/upload-sarif@v4` |
 | Checkov | `checkov` | `github/codeql-action/upload-sarif@v4` |
 
 Enables:
@@ -283,9 +283,9 @@ jobs:
       security-events: write
     with:
       terraform_dir: terraform
-      terraform_version: '~1.9.0'
+      terraform_version: '~1.14.0'
       enable_tflint: true
-      enable_tfsec: true
+      enable_trivy: true
       enable_checkov: true
       generate_tfdocs: true
 ```
@@ -302,7 +302,7 @@ jobs:
     with:
       terraform_dir: terraform
       enable_tflint: false
-      enable_tfsec: true
+      enable_trivy: true
       enable_checkov: true
       generate_tfdocs: false
 ```
@@ -326,9 +326,9 @@ pipeline-as-a-service-stack/
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | `~1.9.0` (configurable) | `fmt` |
-| TFLint | `latest` | Linting & best practices |
-| tfsec | `v1.0.3` (action) | Security scanning → SARIF |
+| Terraform | `~1.14.0` (configurable) | `fmt` |
+| TFLint | `latest` | Linting & best practices (recursive) |
+| Trivy | `aquasecurity/trivy-action@0.35.0` | Security scanning → SARIF |
 | Checkov | latest (pip) | Policy compliance → SARIF |
 | terraform-docs | `v1.3.0` (action) | Documentation drift detection |
 | Python | `3.12` | Checkov runtime |
